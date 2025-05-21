@@ -6,9 +6,6 @@ import numpy as np
 mp_pose = mp.solutions.pose
 POSE_CONNECTIONS = mp_pose.POSE_CONNECTIONS
 
-maes = []
-prev_fused = None
-
 def compute_joint_angle(e1, joint, e3):
     A = e1 - joint
     B = e3 - joint
@@ -46,24 +43,37 @@ def fuse_lms(norm1, norm2, world1, world2):
 def run_analysis(frame1, frame2, norms1, norms2, worlds1, worlds2):
     fused = np.array([fuse_lms(*zipped) for zipped in zip(norms1, norms2, worlds1, worlds2)])
 
-    maes.append(np.mean(
-        np.abs(
-            np.array([lm.z for lm in worlds1]) - np.array([-lm.x for lm in worlds2])
-        ) * (
-            np.array([(lm1.visibility + lm2.visibility) / 2 for lm1, lm2 in zip(norms1, norms2)])   
-        )
-    ))
-
     right_arm_angle = compute_joint_angle(fused[16], fused[14], fused[12])
     left_arm_angle = compute_joint_angle(fused[15], fused[13], fused[11])
 
-    cv2.putText(frame2, f"Right Arm Angle: {right_arm_angle:.1f} deg", (20, frame2.shape[0]-20),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(frame2, f"Left Arm Angle: {left_arm_angle:.1f} deg", (20, frame2.shape[0]-50),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    right_shoulder_angle = compute_joint_angle(fused[14], fused[12], fused[24])
+    left_shoulder_angle = compute_joint_angle(fused[13], fused[11], fused[23])
 
+    left_wrist_angle = compute_joint_angle(np.mean(fused[17:19:2,:], axis=0), fused[15], fused[13])
+    right_wrist_angle = compute_joint_angle(np.mean(fused[18:20:2,:], axis=0), fused[16], fused[14])
 
-    prev_fused = fused
+    arm_sync = np.abs(right_arm_angle - left_arm_angle) < 20
+
+    full_extension = ((right_shoulder_angle + left_shoulder_angle)/2) > 130 and \
+    ((right_arm_angle + left_arm_angle)/2) > 150
+
+    right_tucked_elbow = np.abs(fused[12, 0] - fused[14, 0]) < 0.07
+    left_tucked_elbow = np.abs(fused[11, 0] - fused[13, 0]) < 0.07
+
+    guide_hand_straight = left_wrist_angle > 150
+    shooting_hand_down = np.abs(right_wrist_angle - 90) < 20
+
+    cv2.putText(frame2, "Full Extension", (20, frame2.shape[0]-50),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0) if arm_sync and full_extension else (0,0,255), 2)
+
+    cv2.putText(frame2, f"Guide Hand Angle: {left_wrist_angle:.0f}", (20, frame2.shape[0]-80),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0) if guide_hand_straight else (0,0,255), 2)
+
+    cv2.putText(frame2, f"Shooting Hand Angle: {right_wrist_angle:.0f}", (20, frame2.shape[0]-110),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0) if shooting_hand_down else (0,0,255), 2)
+
+    cv2.putText(frame2, "Tucked Elbows", (20, frame2.shape[0]-140),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0) if right_tucked_elbow and left_tucked_elbow else (0,0,255), 2)
 
 def draw_pose(frame, landmarks, visibility_thresh=0.5):
     h, w, _ = frame.shape
@@ -137,7 +147,7 @@ def run_dual_pose(video1, video2, out1, out2):
 
         combined = cv2.hconcat([frame1, frame2])
         cv2.imshow("Pose Estimation", combined)
-        if cv2.waitKey(500) & 0xFF == ord('q'):
+        if cv2.waitKey(15) & 0xFF == ord('q'):
             break
 
     cap1.release()
@@ -155,5 +165,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run_dual_pose(args.video1, args.video2, args.out1, args.out2)
-
-    print(np.mean(maes))
